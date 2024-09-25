@@ -1,0 +1,132 @@
+---
+title: "Aansh Jha Homework 4"
+format:
+  pdf:
+    code-fold: false
+jupyter: python3
+---
+
+# 1 - Use the filter from the website to download the crash data of the week of June 30, 2024 in CSV format; save it under a directory `data` with an informative name (e.g., `nyccrashes_2024w0630_by20240916.csv`); read the data into a Panda data frame with careful handling of the date time variables.
+
+```{python}
+
+import pandas as pd
+import numpy as np
+import matplotlib
+
+
+df = pd.read_csv('nyccrashes_2024w0630_by20240916.csv')
+```
+
+# 2 - Clean up the variable names. Use lower cases and replace spaces with underscores.
+```{python}
+
+df.columns = df.columns.str.lower().str.replace(' ', '_')
+```
+
+# 3 - Get the basic summaries of each variables: missing percentage; descriptive statistics for continuous variables; frequency tables for discrete variables.
+```{python}
+missing_percentage = df.isna().mean() * 100
+print("Missing Percentage:", missing_percentage)
+descriptive_stats = df.describe()
+print("Descriptive Statistics:", descriptive_stats)
+freq_tables = {}
+for col in df.select_dtypes(include=['object', 'category']).columns:
+    value_counts = df[col].value_counts()
+    freq_tables[col] = value_counts
+print("Frequency Tables:", freq_tables)
+```
+
+# 4 - Are their invalid `longitude` and `latitude` in the data? If so, replace them with `NA`.
+```{python}
+latitude_col = 'latitude'
+longitude_col = 'longitude'
+
+df[latitude_col] = np.where((df[latitude_col] < -90) | (df[latitude_col] > 90), np.nan, df[latitude_col])
+
+df[longitude_col] = np.where((df[longitude_col] < -180) | (df[longitude_col] > 180), np.nan, df[longitude_col])
+
+print("Latitude sample:", df[latitude_col].head())
+print("Longitude sample:", df[longitude_col].head())
+```
+
+# 5 - Are there `zip_code` values that are not legit NYC zip codes? If so, replace them with `NA`.
+```{python}
+valid_codes = set() 
+
+for i in range(10001, 14975):
+    valid_codes.add(i)
+
+for index, zip_code in df['zip_code'].items():
+    if zip_code in valid_codes:
+        df.at[index, 'zip_code'] = zip_code
+    else:
+        df.at[index, 'zip_code'] = np.nan
+
+print("Updated ZIP Codes:", df['zip_code'].head())
+```
+
+# 6: Are there missing in `zip_code` and `borough`? Do they always co-occur?
+```{python}
+missing_zip = df['zip_code'].isna()
+missing_borough = df['borough'].isna()
+
+co_occur_missing_count = df[missing_zip & missing_borough].shape[0]
+print(f"Number of cases where both ZIP and Borough are missing: {co_occur_missing_count}")
+```
+
+# 7 - Are there cases where `zip_code` and `borough` are missing but the geo codes are not missing? If so, fill in `zip_code` and `borough` using the geo codes.
+```{python}
+missing_geo = df[missing_zip & missing_borough & df['latitude'].notna() & df['longitude'].notna()]
+
+print(f"Number of missing ZIP and Borough with available geolocation: {missing_geo.shape[0]}")
+
+df.loc[missing_zip & missing_borough, 'zip_code'] = df['latitude']
+df.loc[missing_zip & missing_borough, 'borough'] = df['longitude']
+
+print("Sample of updated records:", df[['zip_code', 'borough']].head())
+```
+
+# 8 - Is it redundant to keep both location and the longitude/latitude at the NYC Open Data server?
+Longitude and latitude offer precise geolocation for accurate mapping, while zip codes and boroughs are more user-friendly. Keeping both is useful for identifying NYC hotspots through geographic analysis.
+
+
+# 9 - Check the frequency of `crash_time` by hour. Is there a matter of bad luck at exactly midnight? How would you interpret this? Is there a matter of bad luck at exactly midnight? How would you interpret this?
+
+```{python}
+df['crash_hour'] = pd.to_datetime(df['crash_time'], format='%H:%M').dt.hour
+crash_hourly_frequency = df['crash_hour'].value_counts().sort_index()
+print("Crash Frequency by Hour:", crash_hourly_frequency)
+midnight_crash_count = crash_hourly_frequency.get(0, 0)
+print(f"Crashes at midnight: {midnight_crash_count}")
+```
+
+Crashes at midnight may be more frequent due to factors like low visibility, driver fatigue, or impaired driving. Not necessarily "bad luck" but a result of riskier driving conditions at that time.
+
+# 10 - Are the number of persons killed/injured the summation of the numbers of pedestrians, cyclist, and motorists killed/injured? If so, is it redundant to keep these two columns at the NYC Open Data server?
+```{python}
+df['calculated_injured_total'] = df[['number_of_pedestrians_injured', 'number_of_cyclist_injured', 'number_of_motorist_injured']].sum(axis=1)
+df['calculated_killed_total'] = df[['number_of_pedestrians_killed', 'number_of_cyclist_killed', 'number_of_motorist_killed']].sum(axis=1)
+
+injured_match = (df['number_of_persons_injured'] == df['calculated_injured_total']).all()
+killed_match = (df['number_of_persons_killed'] == df['calculated_killed_total']).all()
+
+print(f"Injury totals match: {injured_match}")
+print(f"Fatality totals match: {killed_match}")
+```
+
+It's redundant to keep both killed and injured columns since discrepancies exist between reported totals and the sum of specific injury categories. The summation of injured columns should be fixed for accuracy.
+
+# 11 - Print the whole frequency table of `contributing_factor_vehicle_1`. Convert lower cases to uppercases and check the frequencies again.
+```{python}
+initial_factors_freq = df['contributing_factor_vehicle_1'].value_counts()
+print("Initial Frequency Table:", initial_factors_freq)
+
+df['contributing_factor_vehicle_1'] = df['contributing_factor_vehicle_1'].str.upper()
+
+upper_factors_freq = df['contributing_factor_vehicle_1'].value_counts()
+print("Uppercase Frequency Table:", upper_factors_freq)
+```
+
+# 12 - Provided an opportunity to meet the data provider, what suggestions would you make based on your data exploration experience?
+Fix discrepancies in injury/fatality totals and ensure valid geolocation data
