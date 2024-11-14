@@ -1,0 +1,144 @@
+---
+title: "Aansh Jha Homework 5"
+format:
+  pdf:
+    code-fold: false
+jupyter: python3
+---
+
+# Load the Data
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+
+csv_file = 'data/nyccrashes_2024w0630_by20240916.csv'  
+feather_file = 'data/nyccrashes_cleaned.feather' 
+
+df = pd.read_csv(csv_file)
+
+df.to_feather(feather_file)
+
+csv_size = os.path.getsize(csv_file)
+feather_size = os.path.getsize(feather_file)
+
+csv_size_mb = csv_size / (1024 * 1024)
+feather_size_mb = feather_size / (1024 * 1024)
+
+print(f"CSV file size: {csv_size_mb:.2f} MB")
+print(f"Feather file size: {feather_size_mb:.2f} MB")
+
+dff = pd.read_feather(feather_file)
+print(dff.shape)
+print(dff.head())
+
+print(df.columns)
+
+```
+# 1. Construct a Contingency Table for Missing Geocode Data by Borough
+```{python}
+import pandas as pd
+import scipy.stats as stats
+
+df['Missing_Geocode'] = df['LATITUDE'].isnull() | df['LONGITUDE'].isnull()
+
+# Create the contingency table
+contingency_table = pd.crosstab(df['BOROUGH'], df['Missing_Geocode'])
+print(contingency_table)
+
+# Chi-square test
+chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
+print(f"Chi-Square Statistic: {chi2}, P-value: {p}")
+
+if p < 0.05:
+    print("Reject the null hypothesis: Missing geocode data is associated with the borough.")
+else:
+    print("Fail to reject the null hypothesis: No association between missing geocode data and borough.")
+```
+# 2. Create Hour Variable and Plot Histogram of Crashes by Hour
+```{python}
+import matplotlib.pyplot as plt
+
+# Convert CRASH TIME to datetime and extract hour
+df['CRASH TIME'] = pd.to_datetime(df['CRASH TIME'], format='%H:%M')
+df['hour'] = df['CRASH TIME'].dt.hour
+
+# Plot histogram for all data
+plt.figure(figsize=(10, 6))
+plt.hist(df['hour'], bins=24, alpha=0.7)
+plt.xlabel('Hour of Day')
+plt.ylabel('Number of Crashes')
+plt.title('Number of Crashes by Hour')
+plt.xticks(range(24))
+plt.show()
+
+# Plot histogram for each borough
+plt.figure(figsize=(12, 8))
+for borough in df['BOROUGH'].dropna().unique():
+    subset = df[df['BOROUGH'] == borough]
+    plt.hist(subset['hour'], bins=24, alpha=0.5, label=borough)
+
+plt.xlabel('Hour of Day')
+plt.ylabel('Number of Crashes')
+plt.title('Number of Crashes by Hour and Borough')
+plt.legend(title='Borough')
+plt.show()
+```
+
+# 3. Overlay Crash Locations on a Map of NYC
+```{python}
+import geopandas as gpd
+from shapely.geometry import Point
+import contextily as ctx
+
+# Create a GeoDataFrame
+geometry = [Point(xy) for xy in zip(df['LONGITUDE'], df['LATITUDE'])]
+gdf = gpd.GeoDataFrame(df, geometry=geometry)
+gdf.crs = "EPSG:4326"  # WGS 84
+
+# Filter for NYC bounds (approximate bounds)
+nyc_bounds = gdf.cx[-74.05:-73.85, 40.63:40.85]
+
+# Reproject to Web Mercator
+gdf_nyc = nyc_bounds.to_crs(epsg=3857)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(12, 12))
+gdf_nyc.plot(ax=ax, marker='o', color='red', markersize=5, alpha=0.5)
+ctx.add_basemap(ax, crs=gdf_nyc.crs.to_string())
+
+plt.title("Crash Locations in New York City")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
+```
+# 4. Create 'Severe' Variable and Construct Cross Table
+```{python}
+# Create the 'severe' variable
+df['severe'] = ((df['NUMBER OF PERSONS INJURED'] > 0) | (df['NUMBER OF PERSONS KILLED'] > 0)).astype(int)
+
+# Crosstab for severity vs borough
+severity_borough_table = pd.crosstab(df['BOROUGH'], df['severe'])
+print(severity_borough_table)
+
+# Chi-square test
+chi2, p, dof, expected = stats.chi2_contingency(severity_borough_table)
+print(f"Chi-Square Statistic: {chi2}, P-value: {p}")
+
+if p < 0.05:
+    print("Reject the null hypothesis: Severity is associated with borough.")
+else:
+    print("Fail to reject the null hypothesis: No association between severity and borough.")
+```
+# 5. Merge Crash Data with ZIP Code Database
+```{python}
+zip_code_data = pd.read_csv('data/nypd_precincts.csv', encoding='latin1')  # Wasn't sure what to do with the encoding error so I googled it
+
+df['ZIP CODE'] = df['ZIP CODE'].astype(str)
+zip_code_data['Precinct'] = zip_code_data['Precinct'].astype(str)
+
+merged_data = pd.merge(df, zip_code_data, left_on='ZIP CODE', right_on='Precinct', how='left')
+print(merged_data.head())
+```
