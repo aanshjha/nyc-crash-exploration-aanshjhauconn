@@ -1,0 +1,6 @@
+* text=auto
+*.csv text eol=lf
+*.json text eol=lf
+*.geojson text eol=lf
+*.qmd text eol=lf
+

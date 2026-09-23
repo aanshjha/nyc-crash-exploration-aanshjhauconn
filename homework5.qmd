@@ -1,144 +1,213 @@
 ---
-title: "Aansh Jha Homework 5"
+title: "NYC Crash Data Exploration"
+author: "Aansh Jha"
 format:
   pdf:
-    code-fold: false
+    keep-tex: false
+    pdf-engine: tectonic
 jupyter: python3
+execute:
+  warning: false
+code-overflow: wrap
 ---
 
-# Load the Data
 ```{python}
-import pandas as pd
+#| label: setup
+from pathlib import Path
+import json
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import os
-
-csv_file = 'data/nyccrashes_2024w0630_by20240916.csv'  
-feather_file = 'data/nyccrashes_cleaned.feather' 
-
-df = pd.read_csv(csv_file)
-
-df.to_feather(feather_file)
-
-csv_size = os.path.getsize(csv_file)
-feather_size = os.path.getsize(feather_file)
-
-csv_size_mb = csv_size / (1024 * 1024)
-feather_size_mb = feather_size / (1024 * 1024)
-
-print(f"CSV file size: {csv_size_mb:.2f} MB")
-print(f"Feather file size: {feather_size_mb:.2f} MB")
-
-dff = pd.read_feather(feather_file)
-print(dff.shape)
-print(dff.head())
-
-print(df.columns)
-
-```
-# 1. Construct a Contingency Table for Missing Geocode Data by Borough
-```{python}
 import pandas as pd
-import scipy.stats as stats
+from scipy.stats import chi2_contingency
 
-df['Missing_Geocode'] = df['LATITUDE'].isnull() | df['LONGITUDE'].isnull()
-
-# Create the contingency table
-contingency_table = pd.crosstab(df['BOROUGH'], df['Missing_Geocode'])
-print(contingency_table)
-
-# Chi-square test
-chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
-print(f"Chi-Square Statistic: {chi2}, P-value: {p}")
-
-if p < 0.05:
-    print("Reject the null hypothesis: Missing geocode data is associated with the borough.")
-else:
-    print("Fail to reject the null hypothesis: No association between missing geocode data and borough.")
+DATA_DIR = Path("data")
+CRASH_FILE = DATA_DIR / "nyc_crashes_2024-06-30_to_2024-07-06.csv"
+FEATHER_FILE = DATA_DIR / "derived" / "nyc_crashes_2024-06-30_to_2024-07-06.feather"
+FEATHER_FILE.parent.mkdir(exist_ok=True)
 ```
-# 2. Create Hour Variable and Plot Histogram of Crashes by Hour
+
+# Load and compare storage formats
+
 ```{python}
-import matplotlib.pyplot as plt
+df = pd.read_csv(
+    CRASH_FILE,
+    parse_dates=["crash_date"],
+    dtype={"crash_time": "string", "zip_code": "string"},
+)
+df.columns = (
+    df.columns.str.strip()
+    .str.lower()
+    .str.replace(r"[^a-z0-9]+", "_", regex=True)
+    .str.replace(r"(?<=code)(\d)$", r"_\1", regex=True)
+    .str.strip("_")
+)
 
-# Convert CRASH TIME to datetime and extract hour
-df['CRASH TIME'] = pd.to_datetime(df['CRASH TIME'], format='%H:%M')
-df['hour'] = df['CRASH TIME'].dt.hour
+df.to_feather(FEATHER_FILE)
+reloaded = pd.read_feather(FEATHER_FILE)
 
-# Plot histogram for all data
-plt.figure(figsize=(10, 6))
-plt.hist(df['hour'], bins=24, alpha=0.7)
-plt.xlabel('Hour of Day')
-plt.ylabel('Number of Crashes')
-plt.title('Number of Crashes by Hour')
-plt.xticks(range(24))
+print(f"Rows and columns: {df.shape}")
+print(f"CSV size: {CRASH_FILE.stat().st_size / 1024**2:.2f} MB")
+print(f"Feather size: {FEATHER_FILE.stat().st_size / 1024**2:.2f} MB")
+print(f"Feather round-trip preserved shape: {reloaded.shape == df.shape}")
+```
+
+# 1. Missing geocode data by borough
+
+Values outside a conservative NYC bounding box, including `(0, 0)`, are treated as missing geocodes.
+
+```{python}
+df["missing_geocode"] = ~(
+    df["latitude"].between(40.45, 40.95)
+    & df["longitude"].between(-74.30, -73.65)
+)
+
+geocode_table = pd.crosstab(df["borough"], df["missing_geocode"])
+display(geocode_table)
+
+chi2, p_value, degrees_of_freedom, expected = chi2_contingency(geocode_table)
+print(f"Chi-square statistic: {chi2:.3f}")
+print(f"Degrees of freedom: {degrees_of_freedom}")
+print(f"P-value: {p_value:.4f}")
+print(
+    "Conclusion: "
+    + (
+        "reject the null hypothesis of independence."
+        if p_value < 0.05
+        else "do not reject the null hypothesis of independence."
+    )
+)
+```
+
+# 2. Crash counts by hour
+
+```{python}
+df["crash_hour"] = pd.to_datetime(
+    df["crash_time"], format="%H:%M", errors="coerce"
+).dt.hour
+
+hour_counts = df["crash_hour"].value_counts().reindex(range(24), fill_value=0)
+fig, ax = plt.subplots(figsize=(9, 4.5))
+ax.bar(hour_counts.index, hour_counts.values, color="#2563eb")
+ax.set(
+    xlabel="Hour of day",
+    ylabel="Crashes",
+    title="NYC crashes by hour",
+    xticks=range(24),
+)
+fig.tight_layout()
 plt.show()
 
-# Plot histogram for each borough
-plt.figure(figsize=(12, 8))
-for borough in df['BOROUGH'].dropna().unique():
-    subset = df[df['BOROUGH'] == borough]
-    plt.hist(subset['hour'], bins=24, alpha=0.5, label=borough)
-
-plt.xlabel('Hour of Day')
-plt.ylabel('Number of Crashes')
-plt.title('Number of Crashes by Hour and Borough')
-plt.legend(title='Borough')
+borough_hour = pd.crosstab(df["crash_hour"], df["borough"]).reindex(
+    range(24), fill_value=0
+)
+ax = borough_hour.plot(figsize=(9, 5), marker="o")
+ax.set(xlabel="Hour of day", ylabel="Crashes", title="Crashes by hour and borough")
+ax.set_xticks(range(24))
+ax.legend(title="Borough", fontsize=8)
+plt.tight_layout()
 plt.show()
 ```
 
-# 3. Overlay Crash Locations on a Map of NYC
+# 3. Crash locations on a map of NYC
+
+The boundary layer is stored with the project, so the map renders without a live tile service.
+
 ```{python}
-import geopandas as gpd
-from shapely.geometry import Point
-import contextily as ctx
+with open(DATA_DIR / "nyc_borough_boundaries.geojson", encoding="utf-8") as handle:
+    borough_geojson = json.load(handle)
 
-# Create a GeoDataFrame
-geometry = [Point(xy) for xy in zip(df['LONGITUDE'], df['LATITUDE'])]
-gdf = gpd.GeoDataFrame(df, geometry=geometry)
-gdf.crs = "EPSG:4326"  # WGS 84
+fig, ax = plt.subplots(figsize=(7.5, 8))
+for feature in borough_geojson["features"]:
+    geometry = feature["geometry"]
+    polygons = (
+        [geometry["coordinates"]]
+        if geometry["type"] == "Polygon"
+        else geometry["coordinates"]
+    )
+    for rings in polygons:
+        ax.add_patch(
+            Polygon(
+                np.asarray(rings[0]),
+                closed=True,
+                facecolor="#e5e7eb",
+                edgecolor="#4b5563",
+                linewidth=0.5,
+            )
+        )
 
-# Filter for NYC bounds (approximate bounds)
-nyc_bounds = gdf.cx[-74.05:-73.85, 40.63:40.85]
-
-# Reproject to Web Mercator
-gdf_nyc = nyc_bounds.to_crs(epsg=3857)
-
-# Plotting
-fig, ax = plt.subplots(figsize=(12, 12))
-gdf_nyc.plot(ax=ax, marker='o', color='red', markersize=5, alpha=0.5)
-ctx.add_basemap(ax, crs=gdf_nyc.crs.to_string())
-
-plt.title("Crash Locations in New York City")
-plt.xlabel("Longitude")
-plt.ylabel("Latitude")
+mapped = df.loc[~df["missing_geocode"]]
+ax.scatter(
+    mapped["longitude"],
+    mapped["latitude"],
+    s=7,
+    color="#dc2626",
+    alpha=0.45,
+    linewidths=0,
+)
+ax.set(
+    xlim=(-74.28, -73.68),
+    ylim=(40.48, 40.93),
+    xlabel="Longitude",
+    ylabel="Latitude",
+    title="Crash locations, June 30-July 6, 2024",
+)
+ax.set_aspect("equal", adjustable="box")
+fig.tight_layout()
 plt.show()
 ```
-# 4. Create 'Severe' Variable and Construct Cross Table
+
+# 4. Crash severity by borough
+
+A crash is classified as severe when at least one person was injured or killed.
+
 ```{python}
-# Create the 'severe' variable
-df['severe'] = ((df['NUMBER OF PERSONS INJURED'] > 0) | (df['NUMBER OF PERSONS KILLED'] > 0)).astype(int)
+df["severe"] = (
+    (df["number_of_persons_injured"] > 0)
+    | (df["number_of_persons_killed"] > 0)
+).astype("int8")
 
-# Crosstab for severity vs borough
-severity_borough_table = pd.crosstab(df['BOROUGH'], df['severe'])
-print(severity_borough_table)
+severity_table = pd.crosstab(df["borough"], df["severe"])
+display(severity_table)
 
-# Chi-square test
-chi2, p, dof, expected = stats.chi2_contingency(severity_borough_table)
-print(f"Chi-Square Statistic: {chi2}, P-value: {p}")
-
-if p < 0.05:
-    print("Reject the null hypothesis: Severity is associated with borough.")
-else:
-    print("Fail to reject the null hypothesis: No association between severity and borough.")
+chi2, p_value, degrees_of_freedom, expected = chi2_contingency(severity_table)
+print(f"Chi-square statistic: {chi2:.3f}")
+print(f"Degrees of freedom: {degrees_of_freedom}")
+print(f"P-value: {p_value:.4f}")
+print(
+    "Conclusion: "
+    + (
+        "reject the null hypothesis of independence."
+        if p_value < 0.05
+        else "do not reject the null hypothesis of independence."
+    )
+)
 ```
-# 5. Merge Crash Data with ZIP Code Database
+
+# 5. Merge with the NYC ZIP-code reference
+
+The earlier analysis incorrectly joined ZIP codes to NYPD precinct numbers. Here each ZIP code is joined to the official modified ZCTA and its population estimate with a many-to-one validation.
+
 ```{python}
-zip_code_data = pd.read_csv('data/nypd_precincts.csv', encoding='latin1')  # Wasn't sure what to do with the encoding error so I googled it
+zip_reference = pd.read_csv(
+    DATA_DIR / "nyc_modified_zip_codes.csv",
+    dtype={"modzcta": "string", "label": "string", "zcta": "string"},
+)
+zip_lookup = (
+    zip_reference.assign(zip_code=zip_reference["label"].str.split(r",\s*"))
+    .explode("zip_code")
+    .loc[:, ["zip_code", "modzcta", "pop_est"]]
+    .dropna(subset=["zip_code"])
+    .drop_duplicates("zip_code")
+)
 
-df['ZIP CODE'] = df['ZIP CODE'].astype(str)
-zip_code_data['Precinct'] = zip_code_data['Precinct'].astype(str)
+df["zip_code"] = df["zip_code"].str.extract(r"(\d{5})", expand=False)
+merged_data = df.merge(zip_lookup, on="zip_code", how="left", validate="m:1")
 
-merged_data = pd.merge(df, zip_code_data, left_on='ZIP CODE', right_on='Precinct', how='left')
-print(merged_data.head())
+known_zip = merged_data["zip_code"].notna()
+match_rate = merged_data.loc[known_zip, "modzcta"].notna().mean()
+print(f"Rows preserved by left join: {len(merged_data) == len(df)}")
+print(f"Reference match rate among known ZIP codes: {match_rate:.1%}")
+display(merged_data[["zip_code", "modzcta", "pop_est"]].head(10))
 ```
